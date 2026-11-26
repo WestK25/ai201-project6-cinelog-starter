@@ -5,7 +5,7 @@ Business logic for the watchlist feature.
 """
 
 from app import db
-from models import Film, WatchlistEntry
+from models import Film, WatchlistEntry, DEFAULT_WATCHLIST_PUBLIC
 from services.collection_service import FilmNotFoundError
 
 
@@ -14,13 +14,15 @@ class NotOnWatchlistError(Exception):
     pass
 
 
-def add_to_watchlist(user_id, film_id):
+def add_to_watchlist(user_id, film_id, public=DEFAULT_WATCHLIST_PUBLIC):
     """
     Add a film to a user's watchlist.
 
     Args:
         user_id (str): UUID of the user.
         film_id (str): UUID of the film.
+        public (bool, optional): Whether other users can see this entry.
+            Defaults to DEFAULT_WATCHLIST_PUBLIC.
 
     Returns:
         WatchlistEntry: The newly created entry.
@@ -32,7 +34,7 @@ def add_to_watchlist(user_id, film_id):
     if film is None:
         raise FilmNotFoundError(f"No film found with id '{film_id}'")
 
-    entry = WatchlistEntry(user_id=user_id, film_id=film_id)
+    entry = WatchlistEntry(user_id=user_id, film_id=film_id, public=public)
     db.session.add(entry)
     db.session.commit()
     return entry
