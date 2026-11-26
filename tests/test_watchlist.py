@@ -106,3 +106,42 @@ def test_remove_film_not_on_watchlist_raises_and_returns_404(app, sample_user, s
             f"/watchlist/{sample_user}/remove", json={"film_id": sample_film}
         )
         assert response.status_code == 404
+
+
+# ── Visibility ───────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("body_extra, expected_public", [
+    ({"public": True}, True),
+    ({"public": False}, False),
+    ({}, True),  # omitted: the documented default (public)
+])
+def test_add_endpoint_honors_explicit_and_default_visibility(
+    app, sample_user, sample_film, body_extra, expected_public
+):
+    """
+    An explicit public flag should be stored as given. Omitting it should fall
+    back to the documented default, both in the response and in the database.
+    """
+    with app.app_context():
+        response = app.test_client().post(
+            f"/watchlist/{sample_user}/add", json={"film_id": sample_film, **body_extra}
+        )
+        assert response.status_code == 201
+        assert response.get_json()["public"] is expected_public
+
+        entry = WatchlistEntry.query.filter_by(user_id=sample_user, film_id=sample_film).one()
+        assert entry.public is expected_public
+
+
+def test_add_endpoint_rejects_non_boolean_visibility(app, sample_user, sample_film):
+    """
+    A string such as "false" is truthy in Python, so accepting it would make an
+    entry public when the caller asked for private. The endpoint should reject
+    it with 400 and create nothing.
+    """
+    with app.app_context():
+        response = app.test_client().post(
+            f"/watchlist/{sample_user}/add", json={"film_id": sample_film, "public": "false"}
+        )
+        assert response.status_code == 400
+        assert WatchlistEntry.query.filter_by(user_id=sample_user).count() == 0
