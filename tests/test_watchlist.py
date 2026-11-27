@@ -360,6 +360,53 @@ def test_public_view_of_all_private_watchlist_is_empty(app, sample_user, sample_
         assert response.get_json() == []
 
 
+def test_public_view_lists_public_entries_newest_first(app, sample_user):
+    """
+    With several public entries, the public view uses the same newest-first
+    order as the owner's view and still drops the private ones.
+    """
+    with app.app_context():
+        _add_films_with_dates(sample_user, [
+            ("Alien", 10),
+            ("Spirited Away", 0),
+            ("Blade Runner", 5),
+        ])
+        private = WatchlistEntry.query.join(Film).filter(Film.title == "Blade Runner").one()
+        private.public = False
+        db.session.commit()
+
+        listed = app.test_client().get(f"/watchlist/{sample_user}/public").get_json()
+        assert [film["title"] for film in listed] == ["Spirited Away", "Alien"]
+
+
+# ── Request validation and removal over HTTP ─────────────────────────────────
+
+@pytest.mark.parametrize("method, path_suffix", [("post", "add"), ("delete", "remove")])
+@pytest.mark.parametrize("body", [{}, "film_id", ["film_id"]])
+def test_endpoints_require_a_json_object_with_film_id(app, sample_user, method, path_suffix, body):
+    """
+    A missing film_id, or a JSON body that is not an object, is a 400, not
+    a 500.
+    """
+    with app.app_context():
+        client = app.test_client()
+        response = getattr(client, method)(f"/watchlist/{sample_user}/{path_suffix}", json=body)
+        assert response.status_code == 400
+        assert WatchlistEntry.query.count() == 0
+
+
+def test_remove_endpoint_returns_200_and_deletes_the_entry(app, sample_user, sample_film):
+    """A successful removal over HTTP returns 200 and the film is gone."""
+    with app.app_context():
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        response = app.test_client().delete(
+            f"/watchlist/{sample_user}/remove", json={"film_id": sample_film}
+        )
+        assert response.status_code == 200
+        assert get_watchlist(sample_user) == []
+
+
 def test_add_endpoint_rejects_non_boolean_visibility(app, sample_user, sample_film):
     """
     A string such as "false" is truthy in Python, so accepting it would make an
