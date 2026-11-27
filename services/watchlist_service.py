@@ -83,9 +83,9 @@ def remove_from_watchlist(user_id, film_id):
     return True
 
 
-def get_watchlist(user_id):
+def get_watchlist(user_id, public_only=False):
     """
-    Return all films on a user's watchlist, newest first.
+    Return the films on a user's watchlist, newest first.
 
     Entries are ordered by date_added descending, matching get_collection().
     Entries added at the same instant are ordered by film title, then by
@@ -93,13 +93,19 @@ def get_watchlist(user_id):
 
     Args:
         user_id (str): UUID of the user.
+        public_only (bool, optional): If True, return only entries marked
+            public. This is the view other users should see. Defaults to
+            False, which returns every entry (the owner's view).
 
     Returns:
         list[dict]: List of film dicts with watchlist metadata attached.
     """
+    query = WatchlistEntry.query.filter_by(user_id=user_id)
+    if public_only:
+        query = query.filter(WatchlistEntry.public.is_(True))
+
     entries = (
-        WatchlistEntry.query
-        .filter_by(user_id=user_id)
+        query
         .join(Film)
         .order_by(
             WatchlistEntry.date_added.desc(),

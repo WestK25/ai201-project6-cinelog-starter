@@ -25,6 +25,20 @@ def view_watchlist(user_id):
     return jsonify(films)
 
 
+@watchlist_bp.route("/<user_id>/public", methods=["GET"])
+def view_public_watchlist(user_id):
+    """
+    GET /watchlist/<user_id>/public
+
+    Return only the entries the user has marked public, newest first. This
+    is the view to show other users. CineLog has no authentication yet, so
+    the full owner view above is not access-controlled; restricting it
+    requires an auth layer.
+    """
+    films = get_watchlist(user_id, public_only=True)
+    return jsonify(films)
+
+
 @watchlist_bp.route("/<user_id>/add", methods=["POST"])
 def add_film(user_id):
     """
