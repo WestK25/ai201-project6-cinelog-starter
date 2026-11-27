@@ -6,12 +6,14 @@ Fixtures follow the same pattern as tests/test_collection.py.
 """
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from app import create_app, db
 from models import User, Film, WatchlistEntry
 from services.watchlist_service import (
     add_to_watchlist,
     remove_from_watchlist,
     get_watchlist,
+    AlreadyOnWatchlistError,
     NotOnWatchlistError,
 )
 
@@ -48,6 +50,78 @@ def sample_film(app):
         db.session.add(film)
         db.session.commit()
         return film.id
+
+
+# ── Deduplication ────────────────────────────────────────────────────────────
+
+def test_add_to_watchlist_duplicate_raises(app, sample_user, sample_film):
+    """
+    Adding the same film twice should raise AlreadyOnWatchlistError,
+    not silently create a duplicate entry (same contract as
+    test_add_to_collection_duplicate_raises).
+    """
+    with app.app_context():
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        with pytest.raises(AlreadyOnWatchlistError):
+            add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        count = WatchlistEntry.query.filter_by(
+            user_id=sample_user, film_id=sample_film
+        ).count()
+        assert count == 1
+
+
+def test_add_endpoint_returns_409_and_keeps_original_entry(app, sample_user, sample_film):
+    """
+    A duplicate add over HTTP should return 409 Conflict. Re-adding with a
+    different visibility must not overwrite the original entry: a re-add is
+    a conflict, not an update.
+    """
+    with app.app_context():
+        client = app.test_client()
+        first = client.post(f"/watchlist/{sample_user}/add", json={"film_id": sample_film})
+        assert first.status_code == 201
+
+        second = client.post(
+            f"/watchlist/{sample_user}/add", json={"film_id": sample_film, "public": False}
+        )
+        assert second.status_code == 409
+
+        entry = WatchlistEntry.query.filter_by(user_id=sample_user, film_id=sample_film).one()
+        assert entry.id == first.get_json()["id"]
+        assert entry.public is True
+
+
+def test_different_users_can_each_add_the_same_film(app, sample_user, sample_film):
+    """
+    Deduplication is per user: another user adding the same film is not a
+    duplicate.
+    """
+    with app.app_context():
+        other_user = User(username="otheruser", email="other@example.com")
+        db.session.add(other_user)
+        db.session.commit()
+
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+        add_to_watchlist(user_id=other_user.id, film_id=sample_film)
+
+        assert WatchlistEntry.query.filter_by(film_id=sample_film).count() == 2
+
+
+def test_database_rejects_duplicate_watchlist_rows(app, sample_user, sample_film):
+    """
+    The unique (user_id, film_id) constraint is the backstop if two requests
+    pass the service check at the same time.
+    """
+    with app.app_context():
+        db.session.add(WatchlistEntry(user_id=sample_user, film_id=sample_film))
+        db.session.commit()
+
+        db.session.add(WatchlistEntry(user_id=sample_user, film_id=sample_film))
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
 
 
 # ── UUID film IDs ────────────────────────────────────────────────────────────
