@@ -47,7 +47,7 @@ def add_film(user_id):
     Body: { "film_id": "<uuid>", "public": true }  (public optional)
     """
     data = request.get_json()
-    if not data or "film_id" not in data:
+    if not isinstance(data, dict) or "film_id" not in data:
         return jsonify({"error": "film_id is required"}), 400
 
     public = data.get("public", DEFAULT_WATCHLIST_PUBLIC)
@@ -71,7 +71,7 @@ def remove_film(user_id):
     Body: { "film_id": "<uuid>" }
     """
     data = request.get_json()
-    if not data or "film_id" not in data:
+    if not isinstance(data, dict) or "film_id" not in data:
         return jsonify({"error": "film_id is required"}), 400
 
     try:
