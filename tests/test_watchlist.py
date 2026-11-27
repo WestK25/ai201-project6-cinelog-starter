@@ -5,6 +5,8 @@ Tests for the watchlist service and endpoints.
 Fixtures follow the same pattern as tests/test_collection.py.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 from app import create_app, db
@@ -169,6 +171,60 @@ def test_watchlist_stores_and_returns_uuid_film_ids(app, sample_user, sample_fil
 
         listed = client.get(f"/watchlist/{sample_user}").get_json()
         assert [film["id"] for film in listed] == [sample_film]
+
+
+# ── Sort order ───────────────────────────────────────────────────────────────
+
+def _add_films_with_dates(user_id, titles_and_ages):
+    """Create films and watchlist entries added `age` days ago."""
+    now = datetime.now(timezone.utc)
+    for title, age_days in titles_and_ages:
+        film = Film(title=title)
+        db.session.add(film)
+        db.session.flush()
+        db.session.add(WatchlistEntry(
+            user_id=user_id, film_id=film.id, date_added=now - timedelta(days=age_days)
+        ))
+    db.session.commit()
+
+
+def test_get_watchlist_returns_newest_first(app, sample_user):
+    """
+    get_watchlist() should return films by date_added descending. The titles
+    are chosen so alphabetical order would give the opposite result.
+    """
+    with app.app_context():
+        _add_films_with_dates(sample_user, [
+            ("Alien", 10),
+            ("Spirited Away", 0),
+            ("Blade Runner", 5),
+        ])
+
+        titles = [film["title"] for film in get_watchlist(sample_user)]
+        assert titles == ["Spirited Away", "Blade Runner", "Alien"]
+
+        listed = app.test_client().get(f"/watchlist/{sample_user}").get_json()
+        assert [film["title"] for film in listed] == titles
+
+
+def test_get_watchlist_breaks_date_ties_by_title(app, sample_user):
+    """
+    Films saved at the same instant should come back in a stable order
+    (by title), not in whatever order the database happens to return.
+    """
+    with app.app_context():
+        same_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        for title in ["The Godfather", "Alien", "Paddington 2"]:
+            film = Film(title=title)
+            db.session.add(film)
+            db.session.flush()
+            db.session.add(WatchlistEntry(
+                user_id=sample_user, film_id=film.id, date_added=same_time
+            ))
+        db.session.commit()
+
+        titles = [film["title"] for film in get_watchlist(sample_user)]
+        assert titles == ["Alien", "Paddington 2", "The Godfather"]
 
 
 # ── Remove ───────────────────────────────────────────────────────────────────
