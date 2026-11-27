@@ -27,12 +27,16 @@ ai201-project6-cinelog-starter/
 ├── models.py                  # SQLAlchemy models
 ├── seed.py                    # Demo data loader
 ├── services/
-│   └── collection_service.py  # Business logic for collections
+│   ├── collection_service.py  # Business logic for collections
+│   └── watchlist_service.py   # Business logic for watchlists
 ├── routes/
 │   ├── films.py               # Film browsing endpoints
-│   └── collection.py          # Collection endpoints
+│   ├── collection.py          # Collection endpoints
+│   └── watchlist/
+│       └── watchlist.py       # Watchlist endpoints
 ├── tests/
-│   └── test_collection.py     # Tests for collection service
+│   ├── test_collection.py     # Tests for collection service
+│   └── test_watchlist.py      # Tests for watchlist service and endpoints
 ├── CONTRIBUTING.md            # Commit conventions and PR guidelines
 └── requirements.txt
 ```
@@ -56,6 +60,17 @@ ai201-project6-cinelog-starter/
 | POST | `/collection/<user_id>/add` | Add a film to the collection |
 | DELETE | `/collection/<user_id>/remove` | Remove a film from the collection |
 
+### Watchlist
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/watchlist/<user_id>` | Get a user's full watchlist (newest first) |
+| GET | `/watchlist/<user_id>/public` | Get only the entries marked public (newest first) |
+| POST | `/watchlist/<user_id>/add` | Add a film. Body: `{"film_id": "<uuid>", "public": true}`; `public` is optional and defaults to `true`. Returns 404 for an unknown film and 409 if the film is already on the watchlist |
+| DELETE | `/watchlist/<user_id>/remove` | Remove a film. Returns 404 if it is not on the watchlist |
+
+CineLog has no authentication yet. The public view is the one to show other users; the full view is not access-controlled.
+
 ---
 
 ## Data Models
@@ -65,6 +80,10 @@ ai201-project6-cinelog-starter/
 **User** — A registered user. IDs are UUIDs.
 
 **CollectionEntry** — Links a user to a film they've watched. Stores rating and date added. A user can only have one entry per film.
+
+**WatchlistEntry** — Links a user to a film they want to watch. Stores date added and a `public` flag (default `true`). A user can only have one entry per film.
+
+If you created `cinelog.db` before the watchlist's unique constraint existed, delete it and run `python seed.py` again; `db.create_all()` does not alter existing tables.
 
 ---
 
