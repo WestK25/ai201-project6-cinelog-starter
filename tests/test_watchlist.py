@@ -287,6 +287,45 @@ def test_add_endpoint_honors_explicit_and_default_visibility(
         assert entry.public is expected_public
 
 
+def test_public_view_hides_private_entries(app, sample_user, sample_film):
+    """
+    The public view should list only public entries (newest first), while
+    the owner's view still lists everything. A film added without a
+    visibility flag is public by default, so it must appear publicly.
+    """
+    with app.app_context():
+        private_film = Film(title="Alien", year=1979, genre="Horror")
+        db.session.add(private_film)
+        db.session.commit()
+
+        client = app.test_client()
+        client.post(f"/watchlist/{sample_user}/add", json={"film_id": sample_film})
+        client.post(
+            f"/watchlist/{sample_user}/add",
+            json={"film_id": private_film.id, "public": False},
+        )
+
+        owner_view = client.get(f"/watchlist/{sample_user}").get_json()
+        assert {film["id"] for film in owner_view} == {sample_film, private_film.id}
+
+        public_view = client.get(f"/watchlist/{sample_user}/public").get_json()
+        assert [film["id"] for film in public_view] == [sample_film]
+        assert get_watchlist(sample_user, public_only=True) == public_view
+
+
+def test_public_view_of_all_private_watchlist_is_empty(app, sample_user, sample_film):
+    """
+    If every entry is private, the public view should return an empty list
+    with 200, not an error.
+    """
+    with app.app_context():
+        add_to_watchlist(user_id=sample_user, film_id=sample_film, public=False)
+
+        response = app.test_client().get(f"/watchlist/{sample_user}/public")
+        assert response.status_code == 200
+        assert response.get_json() == []
+
+
 def test_add_endpoint_rejects_non_boolean_visibility(app, sample_user, sample_film):
     """
     A string such as "false" is truthy in Python, so accepting it would make an
