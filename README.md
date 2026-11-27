@@ -83,7 +83,7 @@ CineLog has no authentication yet. The public view is the one to show other user
 
 **WatchlistEntry** — Links a user to a film they want to watch. Stores date added and a `public` flag (default `true`). A user can only have one entry per film.
 
-If you created `cinelog.db` before the watchlist's unique constraint existed, delete it and run `python seed.py` again; `db.create_all()` does not alter existing tables.
+If your local database (Flask-SQLAlchemy creates it at `instance/cinelog.db`) predates the watchlist's unique constraint, delete it and run `python seed.py` again; `db.create_all()` does not alter existing tables.
 
 ---
 
