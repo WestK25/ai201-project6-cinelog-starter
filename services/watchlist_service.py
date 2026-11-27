@@ -85,7 +85,11 @@ def remove_from_watchlist(user_id, film_id):
 
 def get_watchlist(user_id):
     """
-    Return all films on a user's watchlist.
+    Return all films on a user's watchlist, newest first.
+
+    Entries are ordered by date_added descending, matching get_collection().
+    Entries added at the same instant are ordered by film title, then by
+    entry id, so the order is deterministic.
 
     Args:
         user_id (str): UUID of the user.
@@ -97,7 +101,11 @@ def get_watchlist(user_id):
         WatchlistEntry.query
         .filter_by(user_id=user_id)
         .join(Film)
-        .order_by(Film.title.asc())
+        .order_by(
+            WatchlistEntry.date_added.desc(),
+            Film.title.asc(),
+            WatchlistEntry.id.asc(),
+        )
         .all()
     )
 
