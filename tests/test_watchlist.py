@@ -127,6 +127,40 @@ def test_database_rejects_duplicate_watchlist_rows(app, sample_user, sample_film
         db.session.rollback()
 
 
+def test_concurrent_duplicate_returns_409_not_500(app, sample_user, sample_film, monkeypatch):
+    """
+    Simulate two requests racing: the duplicate check sees no entry (as if
+    another request had not committed yet), so the insert reaches the unique
+    constraint. The endpoint should still answer 409 and keep one row.
+    """
+    from sqlalchemy.orm import Query
+
+    with app.app_context():
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        real_first = Query.first
+        stale = {"next": True}
+
+        def first_with_one_stale_read(self):
+            if stale["next"]:
+                stale["next"] = False
+                return None
+            return real_first(self)
+
+        monkeypatch.setattr(Query, "first", first_with_one_stale_read)
+
+        response = app.test_client().post(
+            f"/watchlist/{sample_user}/add", json={"film_id": sample_film}
+        )
+        assert response.status_code == 409
+
+        monkeypatch.undo()
+        count = WatchlistEntry.query.filter_by(
+            user_id=sample_user, film_id=sample_film
+        ).count()
+        assert count == 1
+
+
 # ── Nonexistent film ─────────────────────────────────────────────────────────
 
 def test_add_to_watchlist_nonexistent_film_raises(app, sample_user):
