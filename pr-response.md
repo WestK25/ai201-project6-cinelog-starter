@@ -19,14 +19,14 @@ I used two AI coding agents on this PR and set the direction they worked under.
   - open the PR against my fork's `main` only;
   - promise no privacy that the backend cannot enforce.
 
-**Codex (OpenAI)** read the six review comments, compared the watchlist code with the collection service, and applied the rename in my working tree. It reached its usage limit before committing anything.
+**Codex (OpenAI)** read the six review comments and compared the watchlist code with the collection service. It made one local commit adding a `.gitignore` and a stub of this document, and it applied the rename in my working tree. Then it reached its usage limit. Claude carried that `.gitignore` unchanged into the rebuilt branch as `121e77f`, whose trailer credits Claude, but the file is Codex's.
 
 **Claude (Anthropic)** implemented the changes under those constraints:
 - committed the rename and confirmed it with a repository-wide search;
 - ran the interactive rebase and resolved the `models.py` conflict;
 - wrote the UUID follow-up fix;
 - wrote the duplicate check, the nonexistent-film test, the newest-first query, the public view and the stretch features, each with tests;
-- ran each new test against the code before its change to confirm the test fails there;
+- ran each new test against the code before its change. Every regression test fails there; guard tests (per-user deduplication, date ties, the empty-body 400) pass on both versions by design;
 - ran the manual HTTP walkthrough against a live server;
 - drafted this document and the PR description from my decisions.
 
@@ -60,6 +60,8 @@ Commit `45bc3d0 refactor: rename save_to_watchlist to add_to_watchlist`.
 - After the film-existence check, the service queries `WatchlistEntry` for the same `(user_id, film_id)`. If one exists, it raises a new `AlreadyOnWatchlistError`, defined next to `NotOnWatchlistError`. The existence check still runs first, in the same order as the collection service.
 - `POST /watchlist/<user_id>/add` catches `AlreadyOnWatchlistError` and returns **409** with an error message.
 - `WatchlistEntry` gains `UniqueConstraint("user_id", "film_id", name="unique_user_film_watchlist")`. If two requests pass the service check at the same moment, the database still refuses the second row.
+
+**Concurrent duplicates** (`983096e`, test `c5ac992`). An independent review found that the constraint's `IntegrityError` reached the client as a 500. The service now rolls back, confirms that the conflicting entry exists, and raises the same `AlreadyOnWatchlistError`, so a racing duplicate also gets 409. The test makes the duplicate check read stale data once to simulate the race; it fails before the fix and passes after.
 
 **Re-adding with a different `public` value is still a 409, not an update.** A duplicate add should never silently change an existing entry. Changing visibility should be an explicit action, not a side effect of a repeated request. The test below checks that the original entry, including its visibility, survives a conflicting re-add.
 
@@ -95,7 +97,7 @@ Commit `4e25133 test: add nonexistent film test for add_to_watchlist` adds `test
 
 **Why public.** CineLog is a community film-tracking app. Public watchlists reduce the friction of discovery: friends can see what you plan to watch, make recommendations, and start conversations about upcoming films. Most people never change a default, so a private default would leave most watchlists invisible and the social value would never appear. Users who want a more personal list get an explicit private option on each entry.
 
-**The tradeoff I accepted.** Private-by-default optimizes privacy; public-by-default optimizes discovery. A watchlist reveals what someone intends to watch, and making an entry private after it was visible cannot undo the exposure. I chose discovery because the product is social, and I reduced the risk with three controls:
+**The tradeoff I accepted.** Private-by-default optimizes privacy; public-by-default optimizes discovery. A watchlist reveals what someone intends to watch, and making an entry private after it was visible cannot undo the exposure. I chose discovery because the product is social. The implementation reduces the risk with three controls:
 
 - **An explicit per-entry flag** (`1d94a18`). `"public": false` makes an entry private.
 - **Strict validation.** Only JSON booleans are accepted. A string such as `"false"` is truthy in Python and would otherwise make an entry public against the caller's intent, so it gets a 400.
@@ -103,7 +105,7 @@ Commit `4e25133 test: add nonexistent film test for add_to_watchlist` adds `test
 
 **A single source of truth.** `DEFAULT_WATCHLIST_PUBLIC = True` is defined once in `models.py` and used by the column default, the service signature and the route. Changing the policy later is a one-line change, and `test_add_endpoint_honors_explicit_and_default_visibility` asserts the literal default for an omitted flag.
 
-**What this does not promise.** CineLog has no authentication. Every endpoint takes `user_id` from the URL, so the full owner view `GET /watchlist/<user_id>` can still be read by any caller, exactly like `GET /collection/<user_id>`. The public view is the correct endpoint for other users' screens. Enforcing privacy on the owner view requires an auth layer, which is outside this PR's scope. I have documented that limitation rather than describe `public: false` as a privacy guarantee.
+**What this does not promise.** CineLog has no authentication. Every endpoint takes `user_id` from the URL, so the full owner view `GET /watchlist/<user_id>` can still be read by any caller, exactly like `GET /collection/<user_id>`. The public view is the correct endpoint for other users' screens. Enforcing privacy on the owner view requires an auth layer, which is outside this PR's scope. This document states that limitation rather than describing `public: false` as a privacy guarantee.
 
 **Tests.**
 - `test_public_view_hides_private_entries`: the public view lists only public entries while the owner view lists all of them, and a film added without a flag appears publicly.
@@ -162,7 +164,7 @@ Commit `e51850b fix: update watchlist to UUID film IDs after rebasing on main` d
 
 **History cleanup.** The interactive rebase also reworded two inherited commits, keeping their original author:
 - The message "added watchlist model and endpoint fixed a bug more changes" uses phrases `CONTRIBUTING.md` calls unacceptable. The commit became `080a6be feat: add watchlist service, endpoints and film_id index`; the model itself already existed on `main`.
-- The next commit's message described only the `db.session.get` change, but the commit also fixed a broken blueprint import that kept the app from starting. It became `ca9d72b fix: correct the watchlist blueprint import and use db.session.get`.
+- The next commit's message described only the `db.session.get` change, but the commit also fixed a broken blueprint import that kept the app from starting. It became `ca9d72b fix: correct the watchlist blueprint import and use db.session.get`. That commit still bundles two changes. It was kept intact, rather than split, to preserve the original author's commit.
 
 The branch has no merge commits: `git log --merges main..feature/watchlist` is empty.
 
@@ -177,19 +179,29 @@ The branch has no merge commits: `git log --merges main..feature/watchlist` is e
   - Omitting the flag uses `DEFAULT_WATCHLIST_PUBLIC`.
   - The tests cover explicit `true`, explicit `false`, omitted and invalid values, in both the response and the database.
 - **Second edge-case test** (`afb0a4a`). `test_add_endpoint_rejects_non_boolean_visibility` sends `"public": "false"` and expects 400 with no entry created. Accepting the string would make an entry public when the caller asked for private.
-- **Additional edge cases:**
+- **Additional edge cases and hardening:**
   - per-user deduplication;
   - the database-level unique constraint;
+  - a racing duplicate (409, not 500);
   - date-tie ordering;
-  - the all-private public view.
+  - public-view ordering;
+  - the all-private public view;
+  - removal over HTTP;
+  - request validation. A JSON body that is not an object used to crash with a 500 and now returns 400 (`3fa335c`, tests `780548e`).
 
-The suite has grown from 11 to 20 tests, and `python -m pytest -q` reports **20 passed**.
+`main` has 4 tests (all for collections). The branch had 11 when this round of review changes began, and `python -m pytest -q` now reports **29 passed**.
 
 ## Commit history
 
-Output of `git log --oneline main..feature/watchlist` when the PR was opened. The next commit adds this document.
+Output of `git log --oneline main..feature/watchlist` after the review fixes. The next commit updates this document.
 
 ```text
+92b674e docs: give the actual local database path in README
+780548e test: cover watchlist request validation, HTTP removal and public order
+3fa335c fix: reject non-object JSON bodies on watchlist endpoints
+c5ac992 test: cover a duplicate that races past the service check
+983096e fix: return 409 when a concurrent duplicate hits the unique constraint
+608de14 docs: add PR response to the watchlist review
 bd4fb50 docs: document watchlist endpoints and model in README
 a9d6c3f test: cover the public watchlist view
 a0efe0b feat: add a public watchlist view that excludes private entries
@@ -210,30 +222,86 @@ ca9d72b fix: correct the watchlist blueprint import and use db.session.get
 080a6be feat: add watchlist service, endpoints and film_id index
 ```
 
-The commits can also be viewed on the [PR's commits tab](https://github.com/WestK25/ai201-project6-cinelog-starter/pull/1/commits). Each review comment maps to its own commit: the rename, the deduplication fix, the missing-film test, the UUID fix, the sort change and the visibility work. Behaviour changes and their tests are separate commits, as `CONTRIBUTING.md` requires.
+The same history is on the [PR's commits tab](https://github.com/WestK25/ai201-project6-cinelog-starter/pull/1/commits). Each review comment maps to its own commits: the rename, the deduplication fix, the missing-film test, the UUID fix, the sort change and the visibility work. Behaviour changes and their tests are separate commits, as `CONTRIBUTING.md` requires. The one exception is the inherited `ca9d72b`, which was kept as authored.
 
 ## Final PR description
 
-> **What this does.** This PR adds a watchlist to CineLog: a list of films a user wants to watch, kept separate from the collection of films they have already watched. A user can add a film once (a duplicate returns 409), see their watchlist newest first, mark each entry public or private, share a public view that never includes private entries, and remove films. It also addresses all six review comments and rebases the branch onto the UUID migration on `main`.
->
-> **Default visibility: public.** CineLog is a community app, and public watchlists make discovery and recommendations possible. A private default would leave most lists invisible, because most people never change a default. Private-by-default optimizes privacy; public-by-default optimizes discovery. I chose discovery and paired it with three controls: an explicit `"public": false`, strict boolean validation, and a public view that excludes private entries. CineLog has no authentication, so the full owner view is not access-controlled; enforcing that needs an auth layer.
->
-> **Sort order: newest first.** Most users want to see what they added recently, because recent additions reflect what they want to watch now. Newest-first also matches `get_collection()`. Alphabetical order helps find a known title but buries recent additions, so it would fit better as an optional `?sort=` parameter. Ties are broken by title and then id.
->
-> **How to test manually.** Recreate the database with `rm -f instance/cinelog.db && python seed.py`, then start the server with `FLASK_APP=app:create_app flask run --port 5050`. Then, with `curl`:
->
-> | Step | Request | Expected |
-> | --- | --- | --- |
-> | 1 | Add Alien with no flag | 201, `public: true` |
-> | 2 | Add Paddington 2 with `"public": false` | 201 |
-> | 3 | Add Alien again | 409 |
-> | 4 | Add the zero UUID | 404 |
-> | 5 | Add with `"public": "false"` | 400 |
-> | 6 | `GET /watchlist/<user_id>` | Paddington 2 first, then Alien |
-> | 7 | `GET /watchlist/<user_id>/public` | Alien only |
-> | 8 | Remove Alien | 200 |
-> | 9 | Remove Alien again | 404 |
->
-> The PR lists the exact commands, and every step was checked against a live server.
->
-> **Also included:** `remove_from_watchlist()`, the explicit `public` parameter, extra edge-case tests (20 passing), and README documentation of the watchlist API.
+This is the description on [PR #1](https://github.com/WestK25/ai201-project6-cinelog-starter/pull/1), reproduced verbatim:
+
+### What this does
+
+This PR adds a watchlist to CineLog: a list of films a user wants to watch, kept separate from the collection of films they have already watched. A user can add a film once (a duplicate returns 409), see their watchlist newest first, mark each entry public or private, share a public view that never includes private entries, and remove films. It also addresses all six review comments on the original watchlist PR and rebases the branch onto the UUID migration on `main`.
+
+### Design decisions
+
+#### Default visibility: public
+
+New entries are public unless the caller sends `"public": false`. CineLog is a community film-tracking app. Public watchlists make discovery, recommendations and conversations about upcoming films possible, and a private default would leave most lists invisible because most people never change a default.
+
+I weighed that against privacy. A watchlist reveals what someone intends to watch, and making an entry private after it was visible cannot undo the exposure. Private-by-default optimizes privacy; public-by-default optimizes discovery. I chose discovery because the product is social. The implementation pairs that default with three controls:
+
+- an explicit per-entry `"public": false`;
+- strict validation, so a string like `"false"` is rejected with 400 instead of being read as truthy;
+- `GET /watchlist/<user_id>/public`, which never returns private entries.
+
+The default is defined once, as `DEFAULT_WATCHLIST_PUBLIC` in `models.py`, and used by the column, the service and the route.
+
+**Limitation.** CineLog has no authentication. The public view excludes private entries, but the full view `GET /watchlist/<user_id>` can be read by any caller, like every other CineLog endpoint. Enforcing privacy on the owner view needs an auth layer, which is out of scope here.
+
+#### Sort order: newest first
+
+I agree with the review that most users want to see what they added recently. The newest additions reflect current interests and what someone is about to watch, and newest-first matches `get_collection()`, so both lists behave the same way.
+
+Alphabetical order is better for finding a known title in a long list, which makes it a good candidate for an optional `?sort=` parameter later. It buries recent additions, though, so it is not the default. Entries saved at the same instant are ordered by title and then by entry id, so the order is always deterministic.
+
+### How to test manually
+
+```bash
+pip install -r requirements.txt
+rm -f instance/cinelog.db   # a database created before the unique constraint needs recreating
+python seed.py              # prints the demo user_id
+FLASK_APP=app:create_app flask run --port 5050   # port 5000 is taken by AirPlay on macOS
+```
+
+In a second terminal:
+
+```bash
+B=http://127.0.0.1:5050
+U=<demo user_id from seed.py>
+curl -s $B/films/            # copy the ids for Alien and Paddington 2
+ALIEN=<id>; PAD=<id>
+J='Content-Type: application/json'
+
+curl -s -X POST $B/watchlist/$U/add -H "$J" -d "{\"film_id\":\"$ALIEN\"}"                  # 201, "public": true (default)
+curl -s -X POST $B/watchlist/$U/add -H "$J" -d "{\"film_id\":\"$PAD\",\"public\":false}"    # 201, "public": false
+curl -s -X POST $B/watchlist/$U/add -H "$J" -d "{\"film_id\":\"$ALIEN\"}"                  # 409, already on watchlist
+curl -s -X POST $B/watchlist/$U/add -H "$J" -d '{"film_id":"00000000-0000-0000-0000-000000000000"}'  # 404
+curl -s -X POST $B/watchlist/$U/add -H "$J" -d "{\"film_id\":\"$PAD\",\"public\":\"false\"}"  # 400
+curl -s $B/watchlist/$U          # Paddington 2 (newest, private), then Alien
+curl -s $B/watchlist/$U/public   # Alien only
+curl -s -X DELETE $B/watchlist/$U/remove -H "$J" -d "{\"film_id\":\"$ALIEN\"}"  # 200
+curl -s -X DELETE $B/watchlist/$U/remove -H "$J" -d "{\"film_id\":\"$ALIEN\"}"  # 404
+```
+
+This sequence was run against a live `flask run` server, and every status code and ordering matched the comments above. `python -m pytest -q` reports 29 passed.
+
+### Review comments addressed
+
+| Comment | Change |
+| --- | --- |
+| 1. Rename | `save_to_watchlist` → `add_to_watchlist`; 3 references renamed, 0 remain (`45bc3d0`) |
+| 2. Duplicates | Duplicate check mirroring `add_to_collection()`, 409 from the route, and a `(user_id, film_id)` unique constraint (`8e74e49`, tests `a4755c1`); a concurrent duplicate that reaches the constraint also returns 409 (`983096e`, test `c5ac992`) |
+| 3. Missing test | `test_add_to_watchlist_nonexistent_film_raises`, following `test_add_to_collection_nonexistent_film_raises`, plus a 404 assertion (`4e25133`) |
+| 4. Visibility | Public by default via one constant; explicit `public` flag (`1d94a18`); public view (`a0efe0b`) |
+| 5. Sort order | Newest first with a deterministic tie-break (`357d923`); tests in `22da620` |
+| 6. Rebase | Rebased onto the UUID migration with a real `models.py` conflict resolved (`080a6be`); UUID follow-up fix (`e51850b`) |
+
+### Additional improvements
+
+- `remove_from_watchlist()` and `DELETE /watchlist/<user_id>/remove`, returning 404 for a film that isn't on the list (`44a4f7a`, tests `4c59831`).
+- An explicit `public` parameter, with true, false, omitted and invalid values all tested (`1d94a18`, `afb0a4a`).
+- Request validation: a JSON body that is not an object now returns 400 instead of 500 (`3fa335c`, tests `780548e`).
+- Extra edge-case tests: the 400 for non-boolean `public`, per-user deduplication, the database-level constraint, a racing duplicate, date-tie ordering, public-view ordering, an all-private public view, and removal over HTTP.
+- README documentation of the watchlist endpoints and model (`bd4fb50`, `92b674e`).
+
+The full response to each review comment is in `pr-response.md`.
