@@ -9,6 +9,7 @@ from services.watchlist_service import (
     add_to_watchlist,
     remove_from_watchlist,
     get_watchlist,
+    AlreadyOnWatchlistError,
     NotOnWatchlistError,
 )
 from services.collection_service import FilmNotFoundError
@@ -43,6 +44,8 @@ def add_film(user_id):
         entry = add_to_watchlist(user_id=user_id, film_id=data["film_id"], public=public)
     except FilmNotFoundError as e:
         return jsonify({"error": str(e)}), 404
+    except AlreadyOnWatchlistError as e:
+        return jsonify({"error": str(e)}), 409
     return jsonify(entry.to_dict()), 201
 
 

@@ -9,6 +9,11 @@ from models import Film, WatchlistEntry, DEFAULT_WATCHLIST_PUBLIC
 from services.collection_service import FilmNotFoundError
 
 
+class AlreadyOnWatchlistError(Exception):
+    """Raised when a film is already on the user's watchlist."""
+    pass
+
+
 class NotOnWatchlistError(Exception):
     """Raised when trying to remove a film that isn't on the watchlist."""
     pass
@@ -29,10 +34,21 @@ def add_to_watchlist(user_id, film_id, public=DEFAULT_WATCHLIST_PUBLIC):
 
     Raises:
         FilmNotFoundError: If film_id does not exist.
+        AlreadyOnWatchlistError: If the film is already on the user's
+            watchlist. The existing entry, including its visibility, is
+            left unchanged.
     """
     film = db.session.get(Film, film_id)
     if film is None:
         raise FilmNotFoundError(f"No film found with id '{film_id}'")
+
+    existing = WatchlistEntry.query.filter_by(
+        user_id=user_id, film_id=film_id
+    ).first()
+    if existing:
+        raise AlreadyOnWatchlistError(
+            f"Film '{film_id}' is already on this user's watchlist"
+        )
 
     entry = WatchlistEntry(user_id=user_id, film_id=film_id, public=public)
     db.session.add(entry)
