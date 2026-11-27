@@ -4,6 +4,8 @@ services/watchlist_service.py — CineLog (feature/watchlist branch)
 Business logic for the watchlist feature.
 """
 
+from sqlalchemy.exc import IntegrityError
+
 from app import db
 from models import Film, WatchlistEntry, DEFAULT_WATCHLIST_PUBLIC
 from services.collection_service import FilmNotFoundError
@@ -42,18 +44,32 @@ def add_to_watchlist(user_id, film_id, public=DEFAULT_WATCHLIST_PUBLIC):
     if film is None:
         raise FilmNotFoundError(f"No film found with id '{film_id}'")
 
-    existing = WatchlistEntry.query.filter_by(
-        user_id=user_id, film_id=film_id
-    ).first()
-    if existing:
+    if _find_entry(user_id, film_id):
         raise AlreadyOnWatchlistError(
             f"Film '{film_id}' is already on this user's watchlist"
         )
 
     entry = WatchlistEntry(user_id=user_id, film_id=film_id, public=public)
     db.session.add(entry)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Another request inserted the same film after the check above; the
+        # unique constraint rejected this row. Report it as the same conflict.
+        db.session.rollback()
+        if _find_entry(user_id, film_id):
+            raise AlreadyOnWatchlistError(
+                f"Film '{film_id}' is already on this user's watchlist"
+            )
+        raise
     return entry
+
+
+def _find_entry(user_id, film_id):
+    """Return the user's watchlist entry for film_id, or None."""
+    return WatchlistEntry.query.filter_by(
+        user_id=user_id, film_id=film_id
+    ).first()
 
 
 def remove_from_watchlist(user_id, film_id):
